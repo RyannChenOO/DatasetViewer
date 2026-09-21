@@ -2,6 +2,8 @@
 
 An interactive prototype for displaying and annotating long embodied-navigation trajectories. The interface is designed for spatial-intelligence research where each trajectory contains synchronized egocentric observations and environment context.
 
+**Live demo:** [locus-campus-spatial-viewer.ryannchenoo.chatgpt.site](https://locus-campus-spatial-viewer.ryannchenoo.chatgpt.site)
+
 ## Public sample data
 
 The bundled images are sampled from the official Habitat-Lab PointNav top-down-map visualization:
