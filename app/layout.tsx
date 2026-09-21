@@ -13,18 +13,18 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  metadataBase: new URL('https://locus-campus-spatial-viewer.cream-owlet-2009.chatgpt.site'),
-  title: 'LOCUS — Campus Spatial Episode Viewer',
-  description: 'An interactive viewer for embodied spatial intelligence research data from Lost on Campus.',
+  metadataBase: new URL('https://locus-campus-spatial-viewer.ryannchenoo.chatgpt.site'),
+  title: 'Habitat Trajectory Annotator',
+  description: 'Annotate long Habitat trajectories at both frame and segment level.',
   openGraph: {
-    title: 'LOCUS — Campus Spatial Episode Viewer',
-    description: 'Explore, inspect, and annotate embodied spatial intelligence research data.',
-    images: [{ url: '/og.png', width: 1200, height: 630, alt: 'LOCUS campus spatial episode viewer' }],
+    title: 'Habitat Trajectory Annotator',
+    description: 'A trajectory-first annotation workbench for spatial intelligence research.',
+    images: [{ url: '/og.png', width: 1730, height: 909, alt: 'Habitat trajectory annotator interface' }],
   },
   twitter: {
     card: 'summary_large_image',
-    title: 'LOCUS — Campus Spatial Episode Viewer',
-    description: 'Explore, inspect, and annotate embodied spatial intelligence research data.',
+    title: 'Habitat Trajectory Annotator',
+    description: 'Frame-level and segment-level labels for long navigation trajectories.',
     images: ['/og.png'],
   },
 };

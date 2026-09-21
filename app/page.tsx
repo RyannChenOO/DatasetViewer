@@ -1,587 +1,469 @@
+/* oxlint-disable next/no-img-element */
 'use client';
 
-import { useEffect, useMemo, useRef, useState } from 'react';
 import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type PointerEvent as ReactPointerEvent,
+} from 'react';
+import {
+  BoxSelect,
   ChevronLeft,
   ChevronRight,
   CircleDot,
-  Compass,
   Download,
-  FileImage,
   Flag,
-  Focus,
-  ImagePlus,
   Info,
-  Landmark,
-  MapPinned,
-  Minus,
+  Map,
   MousePointer2,
-  Plus,
-  RotateCcw,
+  Pause,
+  Play,
   Route,
-  ScanSearch,
+  ScanLine,
   Trash2,
-  TriangleAlert,
+  Upload,
 } from 'lucide-react';
 
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 
-type Scene = {
+const TOTAL_STEPS = 30;
+const SAMPLE_RATE = 3;
+
+const framePath = (step: number) =>
+  `/habitat/frames/frame-${String(step + 1).padStart(3, '0')}.jpg`;
+const depthPath = (step: number) =>
+  `/habitat/depth/depth-${String(step + 1).padStart(3, '0')}.jpg`;
+const mapPath = (step: number) =>
+  `/habitat/maps/map-${String(step + 1).padStart(3, '0')}.jpg`;
+
+type FrameLabel =
+  | 'landmark'
+  | 'obstacle'
+  | 'navigable'
+  | 'localization-cue'
+  | 'goal-evidence'
+  | 'ambiguous';
+type DrawTool = 'inspect' | 'point' | 'box';
+type SegmentLabel =
+  | 'exploration'
+  | 'correct-progress'
+  | 'wrong-turn'
+  | 'collision-recovery'
+  | 'goal-recognition';
+
+type FrameAnnotation = {
   id: string;
-  title: string;
-  subtitle: string;
-  image: string;
-  map: string;
-  view: string;
-  step: string;
-  distance: string;
-  heading: string;
-  sceneType: string;
-  instruction: string;
-  source?: 'sample' | 'upload';
-};
-
-type AnnotationType = 'landmark' | 'path' | 'obstacle' | 'goal';
-
-type Annotation = {
-  id: string;
-  type: AnnotationType;
+  frame: number;
+  label: FrameLabel;
+  tool: Exclude<DrawTool, 'inspect'>;
   x: number;
   y: number;
+  width?: number;
+  height?: number;
 };
 
-const sampleScenes: Scene[] = [
-  {
-    id: 'E-042-front',
-    title: 'North Walk',
-    subtitle: 'Front observation',
-    image: '/data/episode-01.jpg',
-    map: '/data/episode-03.jpg',
-    view: 'Front view',
-    step: '08',
-    distance: '18.4 m',
-    heading: 'NE 42°',
-    sceneType: 'Building',
-    instruction: 'Follow the brick path, keep the building on your left, then turn toward the courtyard.',
-    source: 'sample',
-  },
-  {
-    id: 'E-042-right',
-    title: 'Hall Edge',
-    subtitle: 'Right observation',
-    image: '/data/episode-02.jpg',
-    map: '/data/episode-03.jpg',
-    view: 'Right view',
-    step: '08',
-    distance: '18.4 m',
-    heading: 'E 87°',
-    sceneType: 'Building',
-    instruction: 'Use the hall facade and lamp posts as stable landmarks while rotating toward the goal.',
-    source: 'sample',
-  },
-  {
-    id: 'E-042-goal',
-    title: 'Brick Path Goal',
-    subtitle: 'Goal image',
-    image: '/data/episode-05.jpg',
-    map: '/data/episode-04.jpg',
-    view: 'Goal image',
-    step: 'Goal',
-    distance: '0.0 m',
-    heading: 'E 90°',
-    sceneType: 'Building',
-    instruction: 'Match the path alignment and building edge in this goal observation.',
-    source: 'sample',
-  },
-  {
-    id: 'E-114-failure',
-    title: 'Foliage Occlusion',
-    subtitle: 'Failure case',
-    image: '/data/episode-11.jpg',
-    map: '/data/episode-04.jpg',
-    view: 'Front view',
-    step: '31',
-    distance: '11.7 m',
-    heading: 'SW 214°',
-    sceneType: 'Intersection',
-    instruction: 'Recover from visual occlusion by tracking the last reliable path direction.',
-    source: 'sample',
-  },
+type SegmentAnnotation = {
+  id: string;
+  start: number;
+  end: number;
+  label: SegmentLabel;
+};
+
+const frameLabels: Array<{ value: FrameLabel; label: string; color: string }> = [
+  { value: 'landmark', label: 'Landmark', color: '#d7f99b' },
+  { value: 'obstacle', label: 'Obstacle', color: '#ff9b77' },
+  { value: 'navigable', label: 'Navigable area', color: '#7ee2c3' },
+  { value: 'localization-cue', label: 'Localization cue', color: '#8ec5ff' },
+  { value: 'goal-evidence', label: 'Goal evidence', color: '#f4d96f' },
+  { value: 'ambiguous', label: 'Ambiguous region', color: '#c9b1ff' },
 ];
 
-const annotationTypes: Array<{
-  id: AnnotationType;
-  label: string;
-  color: string;
-  icon: typeof Landmark;
-}> = [
-  { id: 'landmark', label: 'Landmark', color: '#b8f36a', icon: Landmark },
-  { id: 'path', label: 'Path', color: '#66d9c4', icon: Route },
-  { id: 'obstacle', label: 'Obstacle', color: '#ff9f68', icon: TriangleAlert },
-  { id: 'goal', label: 'Goal', color: '#e9db75', icon: Flag },
+const segmentLabels: Array<{ value: SegmentLabel; label: string; color: string }> = [
+  { value: 'exploration', label: 'Exploration', color: '#8aa39a' },
+  { value: 'correct-progress', label: 'Correct progress', color: '#61a77c' },
+  { value: 'wrong-turn', label: 'Wrong turn', color: '#e09063' },
+  { value: 'collision-recovery', label: 'Collision recovery', color: '#d66565' },
+  { value: 'goal-recognition', label: 'Goal recognition', color: '#d2b84f' },
+];
+
+const frames = Array.from({ length: TOTAL_STEPS }, (_, step) => ({
+  step,
+  image: framePath(step),
+  depth: depthPath(step),
+  map: mapPath(step),
+  time: step / SAMPLE_RATE,
+  action:
+    step === TOTAL_STEPS - 1
+      ? 'STOP'
+      : step < 4 || (step >= 12 && step < 17) || step > 23
+        ? 'MOVE_FORWARD'
+        : step < 7 || (step >= 18 && step < 21)
+          ? 'TURN_LEFT'
+          : 'TURN_RIGHT',
+  collision: step === 9 || step === 21,
+  distance: Math.max(0.35, 8.8 - step * 0.285),
+}));
+
+const initialSegments: SegmentAnnotation[] = [
+  { id: 'seed-a', start: 0, end: 6, label: 'exploration' },
+  { id: 'seed-b', start: 7, end: 18, label: 'correct-progress' },
+  { id: 'seed-c', start: 19, end: 22, label: 'collision-recovery' },
+  { id: 'seed-d', start: 23, end: 29, label: 'goal-recognition' },
 ];
 
 const clamp = (value: number, min: number, max: number) =>
   Math.min(max, Math.max(min, value));
 
+const labelForFrame = (value: FrameLabel) =>
+  frameLabels.find((item) => item.value === value) ?? frameLabels[0];
+const labelForSegment = (value: SegmentLabel) =>
+  segmentLabels.find((item) => item.value === value) ?? segmentLabels[0];
+const stepPercent = (step: number) => (step / (TOTAL_STEPS - 1)) * 100;
+
 export default function Home() {
-  const [scenes, setScenes] = useState(sampleScenes);
-  const [selectedId, setSelectedId] = useState(sampleScenes[0].id);
-  const [zoom, setZoom] = useState(100);
-  const [offset, setOffset] = useState({ x: 0, y: 0 });
-  const [annotationMode, setAnnotationMode] = useState(false);
-  const [annotationType, setAnnotationType] = useState<AnnotationType>('landmark');
-  const [annotations, setAnnotations] = useState<Record<string, Annotation[]>>({});
-  const [annotationsReady, setAnnotationsReady] = useState(false);
-  const fileInputRef = useRef<HTMLInputElement>(null);
-  const dragRef = useRef<{
-    active: boolean;
+  const [currentStep, setCurrentStep] = useState(14);
+  const [activeTab, setActiveTab] = useState<'frame' | 'segment'>('frame');
+  const [drawTool, setDrawTool] = useState<DrawTool>('inspect');
+  const [frameLabel, setFrameLabel] = useState<FrameLabel>('landmark');
+  const [frameAnnotations, setFrameAnnotations] = useState<FrameAnnotation[]>([]);
+  const [segmentLabel, setSegmentLabel] = useState<SegmentLabel>('correct-progress');
+  const [rangeStart, setRangeStart] = useState(7);
+  const [rangeEnd, setRangeEnd] = useState(18);
+  const [segments, setSegments] = useState<SegmentAnnotation[]>(initialSegments);
+  const [thumbnailWidth, setThumbnailWidth] = useState(104);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [draftBox, setDraftBox] = useState<{
     startX: number;
     startY: number;
-    originX: number;
-    originY: number;
-  }>({ active: false, startX: 0, startY: 0, originX: 0, originY: 0 });
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  } | null>(null);
+  const [notice, setNotice] = useState('Session annotations are ready to export.');
+  const filmstripRef = useRef<HTMLDivElement>(null);
+  const importRef = useRef<HTMLInputElement>(null);
 
-  const scene = useMemo(
-    () => scenes.find((item) => item.id === selectedId) ?? scenes[0],
-    [scenes, selectedId],
+  const current = frames[currentStep];
+  const currentAnnotations = frameAnnotations.filter((item) => item.frame === currentStep);
+  const progress = `${stepPercent(currentStep)}%`;
+
+  const activeSegments = useMemo(
+    () => segments.filter((item) => currentStep >= item.start && currentStep <= item.end),
+    [currentStep, segments],
   );
-  const sceneAnnotations = annotations[scene.id] ?? [];
-  const selectedIndex = scenes.findIndex((item) => item.id === scene.id);
 
   useEffect(() => {
-    try {
-      const stored = localStorage.getItem('locus-annotations');
-      if (stored) setAnnotations(JSON.parse(stored));
-    } catch {
-      // Keep the viewer usable if browser storage is unavailable.
-    } finally {
-      setAnnotationsReady(true);
-    }
+    if (!isPlaying) return;
+    const timer = window.setInterval(() => {
+      setCurrentStep((step) => {
+        if (step >= TOTAL_STEPS - 1) {
+          setIsPlaying(false);
+          return step;
+        }
+        return step + 1;
+      });
+    }, 600);
+    return () => window.clearInterval(timer);
+  }, [isPlaying]);
+
+  useEffect(() => {
+    const selected = filmstripRef.current?.querySelector<HTMLElement>(
+      `[data-step="${currentStep}"]`,
+    );
+    selected?.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
+  }, [currentStep]);
+
+  useEffect(() => {
+    const handleKey = (event: KeyboardEvent) => {
+      if (event.key === 'ArrowLeft') setCurrentStep((step) => Math.max(0, step - 1));
+      if (event.key === 'ArrowRight') setCurrentStep((step) => Math.min(TOTAL_STEPS - 1, step + 1));
+    };
+    window.addEventListener('keydown', handleKey);
+    return () => window.removeEventListener('keydown', handleKey);
   }, []);
 
-  useEffect(() => {
-    if (!annotationsReady) return;
-    localStorage.setItem('locus-annotations', JSON.stringify(annotations));
-  }, [annotations, annotationsReady]);
-
-  useEffect(() => {
-    return () => {
-      scenes
-        .filter((item) => item.source === 'upload')
-        .forEach((item) => URL.revokeObjectURL(item.image));
-    };
-  }, [scenes]);
-
-  const resetView = () => {
-    setZoom(100);
-    setOffset({ x: 0, y: 0 });
-  };
-
-  const selectScene = (id: string) => {
-    setSelectedId(id);
-    resetView();
-  };
-
-  const moveScene = (direction: -1 | 1) => {
-    const next = (selectedIndex + direction + scenes.length) % scenes.length;
-    selectScene(scenes[next].id);
-  };
-
-  const handleUpload = (files: FileList | null) => {
-    const file = files?.[0];
-    if (!file || !file.type.startsWith('image/')) return;
-    const objectUrl = URL.createObjectURL(file);
-    const id = `upload-${Date.now()}`;
-    const uploadedScene: Scene = {
-      id,
-      title: file.name.replace(/\.[^/.]+$/, ''),
-      subtitle: 'Local upload',
-      image: objectUrl,
-      map: '/data/episode-03.jpg',
-      view: 'Uploaded view',
-      step: '—',
-      distance: 'Unknown',
-      heading: 'Unknown',
-      sceneType: 'Custom',
-      instruction: 'Add spatial annotations to this locally loaded research image.',
-      source: 'upload',
-    };
-    setScenes((current) => [...current, uploadedScene]);
-    selectScene(id);
-  };
-
-  const addAnnotation = (event: React.MouseEvent<HTMLDivElement>) => {
-    if (!annotationMode) return;
+  const pointFromEvent = (event: ReactPointerEvent<HTMLDivElement>) => {
     const rect = event.currentTarget.getBoundingClientRect();
-    const point: Annotation = {
-      id: `${scene.id}-${Date.now()}`,
-      type: annotationType,
+    return {
       x: clamp(((event.clientX - rect.left) / rect.width) * 100, 0, 100),
       y: clamp(((event.clientY - rect.top) / rect.height) * 100, 0, 100),
     };
-    setAnnotations((current) => ({
-      ...current,
-      [scene.id]: [...(current[scene.id] ?? []), point],
-    }));
   };
 
-  const removeAnnotation = (id: string) => {
-    setAnnotations((current) => ({
-      ...current,
-      [scene.id]: (current[scene.id] ?? []).filter((point) => point.id !== id),
-    }));
+  const addPoint = (x: number, y: number) => {
+    setFrameAnnotations((items) => [
+      ...items,
+      { id: crypto.randomUUID(), frame: currentStep, label: frameLabel, tool: 'point', x, y },
+    ]);
+    setNotice(`Added ${labelForFrame(frameLabel).label} to frame ${currentStep + 1}.`);
+  };
+
+  const onCanvasPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (drawTool === 'inspect') return;
+    event.currentTarget.setPointerCapture(event.pointerId);
+    const point = pointFromEvent(event);
+    if (drawTool === 'point') {
+      addPoint(point.x, point.y);
+      return;
+    }
+    setDraftBox({ startX: point.x, startY: point.y, x: point.x, y: point.y, width: 0, height: 0 });
+  };
+
+  const onCanvasPointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (!draftBox || drawTool !== 'box') return;
+    const point = pointFromEvent(event);
+    setDraftBox((draft) =>
+      draft
+        ? {
+            ...draft,
+            x: Math.min(draft.startX, point.x),
+            y: Math.min(draft.startY, point.y),
+            width: Math.abs(point.x - draft.startX),
+            height: Math.abs(point.y - draft.startY),
+          }
+        : null,
+    );
+  };
+
+  const onCanvasPointerUp = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (!draftBox || drawTool !== 'box') return;
+    event.currentTarget.releasePointerCapture(event.pointerId);
+    if (draftBox.width > 2 && draftBox.height > 2) {
+      setFrameAnnotations((items) => [
+        ...items,
+        {
+          id: crypto.randomUUID(),
+          frame: currentStep,
+          label: frameLabel,
+          tool: 'box',
+          x: draftBox.x,
+          y: draftBox.y,
+          width: draftBox.width,
+          height: draftBox.height,
+        },
+      ]);
+      setNotice(`Added ${labelForFrame(frameLabel).label} box to frame ${currentStep + 1}.`);
+    }
+    setDraftBox(null);
+  };
+
+  const addSegment = () => {
+    const start = Math.min(rangeStart, rangeEnd);
+    const end = Math.max(rangeStart, rangeEnd);
+    setSegments((items) => [
+      ...items,
+      { id: crypto.randomUUID(), start, end, label: segmentLabel },
+    ]);
+    setNotice(`Added ${labelForSegment(segmentLabel).label}: ${start + 1}–${end + 1}.`);
   };
 
   const exportAnnotations = () => {
     const payload = {
-      dataset: 'Lost on Campus sample',
-      exportedAt: new Date().toISOString(),
-      annotations,
+      schema_version: '1.0',
+      dataset: 'Habitat-Lab official PointNav visualization sample',
+      trajectory_id: 'skokloster-pointnav-demo-001',
+      provenance: {
+        source: 'https://github.com/facebookresearch/habitat-lab',
+        asset:
+          'docs/images/habitat-lab-tdmap-viz-images/skokloster-castle.glb_3662.gif',
+        note: 'RGB/depth/map frames are official. Actions, distances and timing shown in the UI are illustrative metadata for the annotation prototype.',
+      },
+      frame_annotations: frameAnnotations,
+      segment_annotations: segments,
     };
-    const blob = new Blob([JSON.stringify(payload, null, 2)], {
-      type: 'application/json',
-    });
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
-    link.download = 'locus-annotations.json';
+    link.download = 'habitat-trajectory-annotations.json';
     link.click();
     URL.revokeObjectURL(url);
+    setNotice('Annotation JSON exported.');
   };
 
-  const onPointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
-    if (annotationMode) return;
-    event.currentTarget.setPointerCapture(event.pointerId);
-    dragRef.current = {
-      active: true,
-      startX: event.clientX,
-      startY: event.clientY,
-      originX: offset.x,
-      originY: offset.y,
-    };
-  };
-
-  const onPointerMove = (event: React.PointerEvent<HTMLDivElement>) => {
-    if (!dragRef.current.active || annotationMode) return;
-    setOffset({
-      x: dragRef.current.originX + event.clientX - dragRef.current.startX,
-      y: dragRef.current.originY + event.clientY - dragRef.current.startY,
-    });
-  };
-
-  const stopDragging = () => {
-    dragRef.current.active = false;
+  const importAnnotations = async (file: File | undefined) => {
+    if (!file) return;
+    try {
+      const payload = JSON.parse(await file.text());
+      if (Array.isArray(payload.frame_annotations)) setFrameAnnotations(payload.frame_annotations);
+      if (Array.isArray(payload.segment_annotations)) setSegments(payload.segment_annotations);
+      setNotice(`Imported annotations from ${file.name}.`);
+    } catch {
+      setNotice('Could not import this JSON file.');
+    }
+    if (importRef.current) importRef.current.value = '';
   };
 
   return (
-    <main className="min-h-screen bg-background text-foreground">
-      <header className="sticky top-0 z-30 border-b border-white/10 bg-[#09120f]/95 px-4 py-3 text-white backdrop-blur-xl lg:px-7">
-        <div className="mx-auto flex max-w-[1680px] items-center justify-between gap-4">
-          <div className="flex min-w-0 items-center gap-3">
-            <div className="grid size-9 shrink-0 place-items-center rounded-xl bg-[#c9ff8c] text-[#102016] shadow-[0_0_22px_rgba(201,255,140,.16)]">
-              <Compass className="size-5" />
-            </div>
-            <div className="min-w-0">
-              <p className="text-sm font-semibold tracking-[0.15em]">LOCUS</p>
-              <p className="truncate text-[11px] text-white/48">Campus spatial episode viewer</p>
-            </div>
-          </div>
-
-          <div className="hidden items-center gap-2 xl:flex">
-            <span className="header-stat"><strong>15</strong> scenes</span>
-            <span className="header-stat"><strong>50k+</strong> frames</span>
-            <span className="header-stat"><strong>6k</strong> QA pairs</span>
-          </div>
-
-          <div className="flex items-center gap-2">
-            <Badge className="hidden bg-white/10 text-white hover:bg-white/10 sm:inline-flex">Research prototype · HW1</Badge>
-            <input
-              ref={fileInputRef}
-              className="hidden"
-              type="file"
-              accept="image/*"
-              onChange={(event) => handleUpload(event.target.files)}
-            />
-            <Button
-              variant="outline"
-              size="sm"
-              className="border-white/15 bg-white/5 text-white hover:bg-white/10 hover:text-white"
-              onClick={() => fileInputRef.current?.click()}
-            >
-              <ImagePlus /> <span className="hidden sm:inline">Add image</span>
-            </Button>
-          </div>
+    <main className="app-shell">
+      <header className="topbar">
+        <div className="brand-lockup">
+          <span className="brand-mark"><Route size={17} /></span>
+          <div><p>Habitat trajectory annotator</p><span>Spatial intelligence data workbench</span></div>
+        </div>
+        <div className="episode-meta">
+          <Badge variant="outline">POINTNAV · 001</Badge>
+          <span>Skokloster Castle</span>
+          <span>{TOTAL_STEPS} sampled observations</span>
+        </div>
+        <div className="header-actions">
+          <input ref={importRef} hidden type="file" accept="application/json" onChange={(event) => void importAnnotations(event.target.files?.[0])} />
+          <Button size="sm" variant="ghost" onClick={() => importRef.current?.click()}><Upload /> Import</Button>
+          <Button size="sm" variant="outline" onClick={exportAnnotations}><Download /> Export JSON</Button>
         </div>
       </header>
 
-      <section className="mx-auto grid max-w-[1680px] gap-4 p-3 sm:p-4 xl:grid-cols-[236px_minmax(0,1fr)_332px] xl:p-5">
-        <aside className="surface order-2 overflow-hidden xl:order-1">
-          <div className="flex items-center justify-between border-b border-border px-4 py-3.5">
-            <div>
-              <p className="eyebrow">Dataset browser</p>
-              <h2 className="mt-1 text-base font-semibold">Navigation views</h2>
-            </div>
-            <Badge variant="outline" className="font-mono text-[10px]">{scenes.length}</Badge>
+      <section className="workspace-grid">
+        <aside className="trajectory-sidebar panel">
+          <div className="panel-heading">
+            <div><span className="kicker">Dataset</span><h2>Trajectories</h2></div>
+            <Badge>1 sample</Badge>
           </div>
-          <div className="flex gap-2 overflow-x-auto p-3 xl:max-h-[calc(100vh-132px)] xl:flex-col xl:overflow-y-auto">
-            {scenes.map((item, index) => {
-              const count = annotations[item.id]?.length ?? 0;
-              const active = item.id === scene.id;
-              return (
-                <button
-                  key={item.id}
-                  onClick={() => selectScene(item.id)}
-                  className={`group min-w-[180px] rounded-xl border p-2 text-left transition xl:min-w-0 ${
-                    active
-                      ? 'border-[#6c9865] bg-[#e8f2de] shadow-[0_8px_20px_rgba(43,84,55,.08)]'
-                      : 'border-transparent hover:border-border hover:bg-muted/70'
-                  }`}
-                >
-                  <div className="relative overflow-hidden rounded-lg bg-[#101714]">
-                    <img
-                      src={item.image}
-                      alt=""
-                      className="aspect-[4/3] w-full object-cover transition duration-300 group-hover:scale-[1.03]"
-                    />
-                    <span className="absolute left-2 top-2 rounded-md bg-black/55 px-1.5 py-0.5 font-mono text-[9px] text-white backdrop-blur">
-                      {String(index + 1).padStart(2, '0')}
-                    </span>
-                    {count > 0 && (
-                      <span className="absolute bottom-2 right-2 flex items-center gap-1 rounded-full bg-[#c9ff8c] px-1.5 py-0.5 text-[9px] font-bold text-[#173020]">
-                        <CircleDot className="size-2.5" /> {count}
-                      </span>
-                    )}
-                  </div>
-                  <div className="mt-2 flex items-start justify-between gap-2">
-                    <div className="min-w-0">
-                      <p className="truncate text-xs font-semibold">{item.title}</p>
-                      <p className="truncate text-[10px] text-muted-foreground">{item.subtitle}</p>
-                    </div>
-                    <span className="font-mono text-[9px] text-muted-foreground">{item.step}</span>
-                  </div>
-                </button>
-              );
-            })}
-          </div>
+          <button className="trajectory-card active" type="button">
+            <div className="trajectory-card__top"><strong>PointNav · 001</strong><span>active</span></div>
+            <p>RGB + depth + synchronized top-down map</p>
+            <div className="mini-progress"><span style={{ width: progress }} /></div>
+            <small>Frame {currentStep + 1} / {TOTAL_STEPS}</small>
+          </button>
+          <dl className="trajectory-stats">
+            <div><dt>Task</dt><dd>PointGoal navigation</dd></div>
+            <div><dt>Sample rate</dt><dd>{SAMPLE_RATE} fps</dd></div>
+            <div><dt>Frame labels</dt><dd>{frameAnnotations.length}</dd></div>
+            <div><dt>Segments</dt><dd>{segments.length}</dd></div>
+          </dl>
+          <div className="source-note"><ScanLine size={16} /><p>Images are sampled from an official Habitat-Lab PointNav visualization. UI action and distance fields are illustrative.</p></div>
         </aside>
 
-        <section className="surface order-1 min-w-0 overflow-hidden xl:order-2">
-          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-4 py-3">
-            <div className="min-w-0">
-              <div className="flex items-center gap-2">
-                <p className="eyebrow">Egocentric observation</p>
-                <span className="text-muted-foreground/35">/</span>
-                <p className="font-mono text-[10px] text-muted-foreground">STEP {scene.step}</p>
-              </div>
-              <h1 className="mt-0.5 truncate text-lg font-semibold tracking-tight sm:text-xl">{scene.title}</h1>
-            </div>
-            <div className="flex items-center gap-1.5">
-              <Button variant="outline" size="icon-sm" aria-label="Previous view" onClick={() => moveScene(-1)}>
-                <ChevronLeft />
-              </Button>
-              <Button variant="outline" size="icon-sm" aria-label="Next view" onClick={() => moveScene(1)}>
-                <ChevronRight />
-              </Button>
-              <div className="mx-1 h-5 w-px bg-border" />
-              <Button
-                size="sm"
-                aria-pressed={annotationMode}
-                className={annotationMode ? 'bg-[#c9ff8c] text-[#173020] hover:bg-[#b7ed7d]' : 'bg-[#244c37] hover:bg-[#183628]'}
-                onClick={() => setAnnotationMode((current) => !current)}
-              >
-                {annotationMode ? <MousePointer2 /> : <ScanSearch />}
-                {annotationMode ? 'Click to label' : 'Annotate'}
-              </Button>
+        <section className="observation-panel panel">
+          <div className="panel-heading compact">
+            <div><span className="kicker">Selected observation</span><h2>RGB · frame {String(currentStep + 1).padStart(3, '0')}</h2></div>
+            <div className="frame-nav">
+              <Button size="icon-sm" variant="outline" aria-label="Previous frame" onClick={() => setCurrentStep((value) => Math.max(0, value - 1))}><ChevronLeft /></Button>
+              <Button size="icon-sm" variant="outline" aria-label={isPlaying ? 'Pause' : 'Play'} onClick={() => setIsPlaying((value) => !value)}>{isPlaying ? <Pause /> : <Play />}</Button>
+              <Button size="icon-sm" variant="outline" aria-label="Next frame" onClick={() => setCurrentStep((value) => Math.min(TOTAL_STEPS - 1, value + 1))}><ChevronRight /></Button>
             </div>
           </div>
-
-          {annotationMode && (
-            <div className="flex flex-wrap items-center gap-2 border-b border-[#bdd4ae] bg-[#edf5e6] px-4 py-2.5">
-              <span className="mr-1 text-[10px] font-bold uppercase tracking-wider text-[#46633e]">Label as</span>
-              {annotationTypes.map((type) => {
-                const Icon = type.icon;
-                const active = annotationType === type.id;
-                return (
-                  <button
-                    key={type.id}
-                    onClick={() => setAnnotationType(type.id)}
-                    className={`flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-xs font-medium transition ${
-                      active ? 'border-[#52734d] bg-white text-[#213d2c] shadow-sm' : 'border-transparent text-[#53704e] hover:bg-white/60'
-                    }`}
-                  >
-                    <Icon className="size-3.5" style={{ color: type.color === '#b8f36a' ? '#4a713b' : type.color }} />
-                    {type.label}
-                  </button>
-                );
-              })}
-              <span className="ml-auto hidden text-[10px] text-[#62755d] sm:block">Click anywhere on the image to place a point</span>
-            </div>
-          )}
-
-          <div
-            className={`viewer-stage relative flex min-h-[520px] items-center justify-center overflow-hidden bg-[#0b110f] p-5 sm:min-h-[620px] ${annotationMode ? 'cursor-crosshair' : 'cursor-grab active:cursor-grabbing'}`}
-            onPointerDown={onPointerDown}
-            onPointerMove={onPointerMove}
-            onPointerUp={stopDragging}
-            onPointerCancel={stopDragging}
-            onWheel={(event) => {
-              event.preventDefault();
-              setZoom((current) => clamp(current + (event.deltaY > 0 ? -10 : 10), 50, 250));
-            }}
-          >
+          <div className="observation-stage">
             <div
-              className="relative inline-block touch-none transition-transform duration-75"
-              style={{ transform: `translate(${offset.x}px, ${offset.y}px) scale(${zoom / 100})` }}
-              onClick={addAnnotation}
+              className={`image-canvas tool-${drawTool}`}
+              onPointerDown={onCanvasPointerDown}
+              onPointerMove={onCanvasPointerMove}
+              onPointerUp={onCanvasPointerUp}
             >
-              <img
-                src={scene.image}
-                alt={`${scene.view}: ${scene.title}, a campus navigation observation`}
-                draggable={false}
-                className="block h-[min(66vh,680px)] max-w-[min(100%,900px)] select-none object-contain shadow-[0_28px_80px_rgba(0,0,0,.42)]"
-              />
-              {sceneAnnotations.map((point, index) => {
-                const meta = annotationTypes.find((type) => type.id === point.type)!;
-                return (
-                  <span
-                    key={point.id}
-                    className="annotation-pin"
-                    style={{ left: `${point.x}%`, top: `${point.y}%`, '--pin-color': meta.color } as React.CSSProperties}
-                    title={`${meta.label} ${index + 1}`}
-                  >
-                    {index + 1}
-                  </span>
+              <img src={current.image} alt={`Habitat RGB observation at frame ${currentStep + 1}`} draggable={false} />
+              {currentAnnotations.map((item) => {
+                const definition = labelForFrame(item.label);
+                return item.tool === 'point' ? (
+                  <button
+                    key={item.id}
+                    type="button"
+                    className="annotation-point"
+                    style={{ left: `${item.x}%`, top: `${item.y}%`, '--annotation-color': definition.color } as React.CSSProperties}
+                    title={`${definition.label} — click to remove`}
+                    onPointerDown={(event) => event.stopPropagation()}
+                    onClick={() => setFrameAnnotations((items) => items.filter((entry) => entry.id !== item.id))}
+                  ><span>{definition.label.slice(0, 1)}</span></button>
+                ) : (
+                  <button
+                    key={item.id}
+                    type="button"
+                    className="annotation-box"
+                    style={{ left: `${item.x}%`, top: `${item.y}%`, width: `${item.width}%`, height: `${item.height}%`, '--annotation-color': definition.color } as React.CSSProperties}
+                    title={`${definition.label} — click to remove`}
+                    onPointerDown={(event) => event.stopPropagation()}
+                    onClick={() => setFrameAnnotations((items) => items.filter((entry) => entry.id !== item.id))}
+                  ><span>{definition.label}</span></button>
                 );
               })}
+              {draftBox && <div className="annotation-box draft" style={{ left: `${draftBox.x}%`, top: `${draftBox.y}%`, width: `${draftBox.width}%`, height: `${draftBox.height}%`, '--annotation-color': labelForFrame(frameLabel).color } as React.CSSProperties} />}
             </div>
-
-            <div className="pointer-events-none absolute left-4 top-4 flex items-center gap-2 rounded-full border border-white/10 bg-black/45 px-3 py-1.5 text-[10px] text-white/70 backdrop-blur-md">
-              <span className="size-1.5 rounded-full bg-[#c9ff8c] shadow-[0_0_9px_#c9ff8c]" />
-              {scene.view} · 120° FoV
-            </div>
-
-            <div className="absolute bottom-4 left-1/2 flex w-[min(520px,calc(100%-32px))] -translate-x-1/2 items-center gap-2 rounded-xl border border-white/10 bg-[#111a17]/88 p-2 text-white shadow-2xl backdrop-blur-xl">
-              <Button variant="ghost" size="icon-sm" className="text-white hover:bg-white/10 hover:text-white" aria-label="Zoom out" onClick={() => setZoom((value) => clamp(value - 10, 50, 250))}>
-                <Minus />
-              </Button>
-              <input
-                type="range"
-                aria-label="Zoom"
-                min={50}
-                max={250}
-                step={10}
-                value={zoom}
-                onChange={(event) => setZoom(Number(event.target.value))}
-                className="zoom-range min-w-0 flex-1"
-              />
-              <Button variant="ghost" size="icon-sm" className="text-white hover:bg-white/10 hover:text-white" aria-label="Zoom in" onClick={() => setZoom((value) => clamp(value + 10, 50, 250))}>
-                <Plus />
-              </Button>
-              <span className="w-11 text-center font-mono text-[10px] text-white/60">{zoom}%</span>
-              <Button variant="ghost" size="icon-sm" className="text-white hover:bg-white/10 hover:text-white" aria-label="Reset view" onClick={resetView}>
-                <RotateCcw />
-              </Button>
-            </div>
+            <span className="frame-chip">t = {current.time.toFixed(1)}s</span>
+          </div>
+          <div className="observation-metadata">
+            <div><span>Action</span><strong>{current.action}</strong></div>
+            <div><span>Goal distance</span><strong>{current.distance.toFixed(2)} m</strong></div>
+            <div><span>Collision</span><strong className={current.collision ? 'danger' : ''}>{current.collision ? 'TRUE' : 'FALSE'}</strong></div>
+            <div><span>Active segment</span><strong>{activeSegments[0] ? labelForSegment(activeSegments[0].label).label : 'Unlabeled'}</strong></div>
           </div>
         </section>
 
-        <aside className="surface order-3 overflow-hidden">
-          <Tabs defaultValue="context" className="gap-0">
-            <div className="flex items-center justify-between border-b border-border px-4 py-3">
-              <div>
-                <p className="eyebrow">Spatial workspace</p>
-                <h2 className="mt-1 text-base font-semibold">Episode details</h2>
+        <aside className="annotation-panel panel">
+          <div className="annotation-tabs" role="tablist">
+            <button type="button" className={activeTab === 'frame' ? 'active' : ''} onClick={() => setActiveTab('frame')}>Frame annotation</button>
+            <button type="button" className={activeTab === 'segment' ? 'active' : ''} onClick={() => setActiveTab('segment')}>Trajectory segment</button>
+          </div>
+          {activeTab === 'frame' ? (
+            <div className="annotation-form">
+              <div><span className="kicker">Geometry</span><div className="tool-grid">
+                <button type="button" className={drawTool === 'inspect' ? 'active' : ''} onClick={() => setDrawTool('inspect')}><MousePointer2 /> Inspect</button>
+                <button type="button" className={drawTool === 'point' ? 'active' : ''} onClick={() => setDrawTool('point')}><CircleDot /> Point</button>
+                <button type="button" className={drawTool === 'box' ? 'active' : ''} onClick={() => setDrawTool('box')}><BoxSelect /> Box</button>
+              </div></div>
+              <label className="field-label"><span>Frame label</span><select value={frameLabel} onChange={(event) => setFrameLabel(event.target.value as FrameLabel)}>{frameLabels.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select></label>
+              <div className="instruction-card"><Info /><p>{drawTool === 'inspect' ? 'Choose Point or Box, then annotate the selected RGB observation.' : drawTool === 'point' ? 'Click a spatial cue in the image. Click an existing point to remove it.' : 'Drag a box around a region. Click an existing box to remove it.'}</p></div>
+              <div className="annotation-list-header"><span>On this frame</span><Badge variant="outline">{currentAnnotations.length}</Badge></div>
+              <div className="annotation-list">
+                {currentAnnotations.length === 0 ? <p className="empty-state">No annotations on frame {currentStep + 1}.</p> : currentAnnotations.map((item) => {
+                  const definition = labelForFrame(item.label);
+                  return <div key={item.id} className="annotation-row"><i style={{ background: definition.color }} /><span><strong>{definition.label}</strong><small>{item.tool} · x {item.x.toFixed(1)} · y {item.y.toFixed(1)}</small></span><button type="button" aria-label="Delete annotation" onClick={() => setFrameAnnotations((items) => items.filter((entry) => entry.id !== item.id))}><Trash2 /></button></div>;
+                })}
               </div>
-              <TabsList>
-                <TabsTrigger value="context">Context</TabsTrigger>
-                <TabsTrigger value="labels">Labels</TabsTrigger>
-              </TabsList>
             </div>
-
-            <TabsContent value="context" className="space-y-4 p-4">
-              <div className="group relative overflow-hidden rounded-xl border border-border bg-[#101714]">
-                <img src={scene.map} alt="Bird's-eye route map for the selected navigation episode" className="aspect-[4/3] w-full object-cover transition duration-300 group-hover:scale-[1.02]" />
-                <div className="absolute inset-x-2 bottom-2 flex items-center justify-between rounded-lg bg-black/55 px-2.5 py-1.5 text-[10px] text-white backdrop-blur">
-                  <span className="flex items-center gap-1.5"><MapPinned className="size-3" /> BEV route</span>
-                  <span className="font-mono">START → GOAL</span>
-                </div>
+          ) : (
+            <div className="annotation-form">
+              <label className="field-label"><span>Segment label</span><select value={segmentLabel} onChange={(event) => setSegmentLabel(event.target.value as SegmentLabel)}>{segmentLabels.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select></label>
+              <div className="range-grid">
+                <label><span>Start frame</span><input type="number" min={1} max={TOTAL_STEPS} value={rangeStart + 1} onChange={(event) => setRangeStart(clamp(Number(event.target.value) - 1, 0, TOTAL_STEPS - 1))} /><button type="button" onClick={() => setRangeStart(currentStep)}>Use current</button></label>
+                <label><span>End frame</span><input type="number" min={1} max={TOTAL_STEPS} value={rangeEnd + 1} onChange={(event) => setRangeEnd(clamp(Number(event.target.value) - 1, 0, TOTAL_STEPS - 1))} /><button type="button" onClick={() => setRangeEnd(currentStep)}>Use current</button></label>
               </div>
-
-              <div className="grid grid-cols-2 gap-2">
-                <div className="metric"><span>Goal distance</span><strong>{scene.distance}</strong></div>
-                <div className="metric"><span>Heading</span><strong>{scene.heading}</strong></div>
-                <div className="metric"><span>Scene type</span><strong>{scene.sceneType}</strong></div>
-                <div className="metric"><span>Annotations</span><strong>{sceneAnnotations.length}</strong></div>
+              <Button className="w-full" onClick={addSegment}><Flag /> Add labeled interval</Button>
+              <Button className="w-full" variant="outline" onClick={() => { setRangeStart(0); setRangeEnd(TOTAL_STEPS - 1); }}>Select entire trajectory</Button>
+              <div className="annotation-list-header"><span>Trajectory labels</span><Badge variant="outline">{segments.length}</Badge></div>
+              <div className="annotation-list segment-list">
+                {segments.map((item) => {
+                  const definition = labelForSegment(item.label);
+                  return <div key={item.id} className="annotation-row"><i style={{ background: definition.color }} /><span><strong>{definition.label}</strong><small>frames {item.start + 1}–{item.end + 1}</small></span><button type="button" aria-label="Delete segment" onClick={() => setSegments((items) => items.filter((entry) => entry.id !== item.id))}><Trash2 /></button></div>;
+                })}
               </div>
-
-              <div className="rounded-xl bg-[#edf3e6] p-4">
-                <div className="flex items-center gap-2 text-[#244c37]">
-                  <Route className="size-4" />
-                  <span className="text-[10px] font-bold uppercase tracking-wider">Route instruction</span>
-                </div>
-                <p className="mt-2 text-sm leading-6 text-[#2f4035]">{scene.instruction}</p>
-              </div>
-
-              <div className="rounded-xl border border-border p-4">
-                <div className="flex items-center gap-2"><Info className="size-4 text-muted-foreground" /><span className="text-xs font-semibold">Research context</span></div>
-                <p className="mt-2 text-xs leading-5 text-muted-foreground">
-                  Lost on Campus evaluates action grounding, spatial foresight, metric awareness, goal-directed planning, ego-allocentric localization, and spatio-temporal consistency in outdoor 3DGS scenes.
-                </p>
-              </div>
-            </TabsContent>
-
-            <TabsContent value="labels" className="p-4">
-              <div className="flex items-center justify-between gap-2">
-                <div>
-                  <p className="text-sm font-semibold">Spatial annotations</p>
-                  <p className="text-[10px] text-muted-foreground">Saved locally in this browser</p>
-                </div>
-                <Button variant="outline" size="sm" onClick={exportAnnotations} disabled={Object.keys(annotations).length === 0}>
-                  <Download /> Export
-                </Button>
-              </div>
-
-              {sceneAnnotations.length === 0 ? (
-                <div className="mt-6 grid place-items-center rounded-xl border border-dashed border-border bg-muted/35 px-5 py-10 text-center">
-                  <div className="grid size-10 place-items-center rounded-full bg-card shadow-sm"><Focus className="size-4 text-muted-foreground" /></div>
-                  <p className="mt-3 text-sm font-medium">No labels on this view</p>
-                  <p className="mt-1 max-w-[220px] text-xs leading-5 text-muted-foreground">Turn on Annotate, choose a category, then click a spatial feature in the image.</p>
-                  <Button className="mt-4 bg-[#244c37] hover:bg-[#183628]" size="sm" onClick={() => setAnnotationMode(true)}>
-                    <ScanSearch /> Start labeling
-                  </Button>
-                </div>
-              ) : (
-                <div className="mt-4 space-y-2">
-                  {sceneAnnotations.map((point, index) => {
-                    const meta = annotationTypes.find((type) => type.id === point.type)!;
-                    const Icon = meta.icon;
-                    return (
-                      <div key={point.id} className="flex items-center gap-3 rounded-xl border border-border bg-muted/30 p-3">
-                        <span className="grid size-8 shrink-0 place-items-center rounded-lg" style={{ backgroundColor: `${meta.color}40`, color: '#294934' }}><Icon className="size-4" /></span>
-                        <div className="min-w-0 flex-1">
-                          <p className="text-xs font-semibold">{meta.label} {index + 1}</p>
-                          <p className="font-mono text-[9px] text-muted-foreground">x {point.x.toFixed(1)} · y {point.y.toFixed(1)}</p>
-                        </div>
-                        <Button variant="ghost" size="icon-sm" aria-label={`Delete ${meta.label} annotation`} onClick={() => removeAnnotation(point.id)}>
-                          <Trash2 />
-                        </Button>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-            </TabsContent>
-          </Tabs>
+            </div>
+          )}
         </aside>
       </section>
 
-      <footer className="mx-auto flex max-w-[1680px] flex-wrap items-center justify-between gap-3 px-5 pb-6 pt-1 text-[10px] text-muted-foreground">
-        <span className="flex items-center gap-1.5"><FileImage className="size-3" /> Sample views derived from the Lost on Campus research paper.</span>
-        <span>Interactive image viewer · zoom · pan · local upload · point annotation · JSON export</span>
-      </footer>
+      <section className="timeline-panel panel">
+        <div className="timeline-title-row">
+          <div><span className="kicker">Long horizontal data</span><h2>Overview + detail timeline</h2></div>
+          <div className="timeline-controls"><span>Thumbnail width</span><input type="range" min="76" max="160" value={thumbnailWidth} onChange={(event) => setThumbnailWidth(Number(event.target.value))} /></div>
+        </div>
+        <div className="overview-section">
+          <span className="track-label">OVERVIEW</span>
+          <button type="button" className="overview-track" aria-label="Jump to a trajectory frame" onClick={(event) => {
+            const rect = event.currentTarget.getBoundingClientRect();
+            setCurrentStep(Math.round(((event.clientX - rect.left) / rect.width) * (TOTAL_STEPS - 1)));
+          }}>
+            {segments.map((item) => {
+              const definition = labelForSegment(item.label);
+              return <span key={item.id} className="segment-span" style={{ left: `${stepPercent(item.start)}%`, width: `${Math.max(1.2, stepPercent(item.end) - stepPercent(item.start))}%`, background: definition.color }} title={`${definition.label}: ${item.start + 1}–${item.end + 1}`} />;
+            })}
+            <i className="playhead" style={{ left: progress }} />
+          </button>
+        </div>
+        <div className="detail-row"><span className="track-label">RGB</span><div ref={filmstripRef} className="filmstrip" aria-label="Trajectory frames">
+          {frames.map((frame) => {
+            const count = frameAnnotations.filter((item) => item.frame === frame.step).length;
+            return <button key={frame.step} data-step={frame.step} type="button" className={frame.step === currentStep ? 'selected' : ''} style={{ minWidth: thumbnailWidth }} onClick={() => setCurrentStep(frame.step)}><img src={frame.image} alt="" /><span>{String(frame.step + 1).padStart(3, '0')}</span>{count > 0 && <b>{count}</b>}</button>;
+          })}
+        </div></div>
+        <div className="event-track-row"><span className="track-label">ACTION</span><div className="event-track">{frames.map((frame) => <button key={frame.step} type="button" aria-label={`Frame ${frame.step + 1}: ${frame.action}`} style={{ width: `${100 / TOTAL_STEPS}%` }} className={`action-cell ${frame.action.toLowerCase()} ${frame.step === currentStep ? 'selected' : ''}`} title={`${frame.step + 1}: ${frame.action}`} onClick={() => setCurrentStep(frame.step)} />)}</div></div>
+        <div className="event-track-row"><span className="track-label">EVENTS</span><div className="event-track">{frames.map((frame) => <button key={frame.step} type="button" aria-label={frame.collision ? `Collision at frame ${frame.step + 1}` : `No event at frame ${frame.step + 1}`} style={{ width: `${100 / TOTAL_STEPS}%` }} className={`event-cell ${frame.collision ? 'collision' : ''}`} title={frame.collision ? `Collision at frame ${frame.step + 1}` : `Frame ${frame.step + 1}`} onClick={() => setCurrentStep(frame.step)} />)}</div></div>
+        <div className="timeline-legend"><span><i className="legend-forward" /> forward</span><span><i className="legend-left" /> turn left</span><span><i className="legend-right" /> turn right</span><span><i className="legend-collision" /> collision</span><p>{notice}</p></div>
+      </section>
+
+      <footer className="provenance-bar"><Map /><p><strong>Public data source:</strong> Habitat-Lab official PointNav top-down-map visualization. The original GIF provides RGB, depth and map imagery; this prototype samples 30 synchronized observations for interface design.</p><a href="https://github.com/facebookresearch/habitat-lab" target="_blank" rel="noreferrer">View source</a></footer>
     </main>
   );
 }
