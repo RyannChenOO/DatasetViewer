@@ -1,85 +1,74 @@
-# Habitat Trajectory Annotator
+# Habitat Navigation Learner
 
-An interactive prototype for displaying and annotating long embodied-navigation trajectories. The interface is designed for spatial-intelligence research where each trajectory contains synchronized egocentric observations and environment context.
+An interactive trajectory viewer, annotation tool, and neural-network demo for embodied spatial-intelligence research. The HW2 model predicts the agent's **next navigation action** from a selected RGB observation plus relative goal distance and angle.
 
 **Live demo:** [locus-campus-spatial-viewer.ryannchenoo.chatgpt.site](https://locus-campus-spatial-viewer.ryannchenoo.chatgpt.site)
 
-## Public sample data
+## Prediction task
 
-The bundled images are sampled from the official Habitat-Lab PointNav top-down-map visualization:
-
-- Project: [Habitat-Lab](https://github.com/facebookresearch/habitat-lab)
-- Original asset: [`skokloster-castle.glb_3662.gif`](https://github.com/facebookresearch/habitat-lab/blob/main/docs/images/habitat-lab-tdmap-viz-images/skokloster-castle.glb_3662.gif)
-- Related platform: [Habitat 3.0](https://aihabitat.org/habitat3/)
-
-The original visualization provides synchronized RGB, depth, and top-down-map views. This prototype samples 30 observations at 3 fps. The action, collision, timing, and goal-distance fields shown in the interface are illustrative metadata for demonstrating the annotation workflow; they are not claimed as ground-truth fields recovered from the GIF.
-
-No images or statistics from the *Lost on Campus* paper are used by this version.
-
-## Why the interface is trajectory-first
-
-Long horizontal data is shown at two scales:
-
-1. **Overview track:** compresses the entire trajectory into a fixed-width strip and displays interval labels plus the current playhead.
-2. **Detail filmstrip:** provides a horizontally scrollable sequence of readable RGB thumbnails. Selecting a frame synchronizes the large RGB observation, depth image, map, and metadata.
-
-Separate action and event tracks make temporal patterns visible without squeezing more information into each thumbnail.
-
-## Annotation model
-
-### Frame-level annotations
-
-- Point or bounding-box geometry
-- Labels: landmark, obstacle, navigable area, localization cue, goal evidence, ambiguous region
-- Coordinates are stored as percentages, so annotations remain aligned when the image is resized
-
-### Trajectory-level annotations
-
-- Whole-trajectory or frame-interval labels
-- Labels: exploration, correct progress, wrong turn, collision recovery, goal recognition
-- Every interval stores an inclusive start and end frame
-
-Annotations live in the current browser session and can be exported to or imported from JSON. Export is the explicit persistence mechanism for this homework prototype; no account or backend database is required.
-
-## Suggested real-data schema
-
-```json
-{
-  "trajectory_id": "scene_episode_id",
-  "scene_id": "scene.glb",
-  "task": "pointnav",
-  "steps": [
-    {
-      "step": 0,
-      "rgb": "frames/000000.jpg",
-      "depth": "depth/000000.png",
-      "position": [0, 0, 0],
-      "rotation": [0, 0, 0, 1],
-      "action": "MOVE_FORWARD",
-      "collision": false,
-      "distance_to_goal": 8.8
-    }
-  ],
-  "frame_annotations": [],
-  "segment_annotations": []
-}
+```text
+Input:  current RGB image + goal distance + relative goal angle
+Output: MOVE_FORWARD | TURN_LEFT | TURN_RIGHT | STOP
 ```
 
-For a real dataset, record this structure while rolling out an agent in Habitat-Sim or Habitat-Lab. Episode definitions alone usually contain scene, start state, goal, and optional shortest-path information; the RGB trajectory must be rendered and saved during rollout.
+The image is resized to 8 x 8 RGB values (192 inputs). Normalized distance and angle add two more inputs. A small feed-forward MLP computes four action logits:
 
-## Implemented interactions
+```text
+194 inputs -> Linear(194, 64) -> ReLU
+           -> Linear(64, 32)  -> ReLU
+           -> Linear(32, 4)
+```
 
-- Frame selection from overview, filmstrip, action track, or event track
-- Previous/next navigation and timed playback
-- Synchronized RGB, depth, and top-down map
-- Adjustable filmstrip thumbnail width for long trajectories
-- Point and box annotations on individual RGB frames
-- Interval annotations on the full trajectory
-- Annotation deletion, JSON import, and JSON export
-- Keyboard navigation with left/right arrow keys
-- Responsive desktop and mobile layouts
+The browser loads the exported trained weights, performs exactly the same preprocessing, runs the forward pass, applies softmax, and displays the predicted action, confidence, and all four probabilities. No Python process or notebook is needed at inference time.
 
-## Run locally
+## Data
+
+The RGB observations are 30 frames sampled from the official public [Habitat-Lab](https://github.com/facebookresearch/habitat-lab) PointNav visualization [`skokloster-castle.glb_3662.gif`](https://github.com/facebookresearch/habitat-lab/blob/main/docs/images/habitat-lab-tdmap-viz-images/skokloster-castle.glb_3662.gif). The source visualization also provides synchronized depth and top-down-map views used by the viewer.
+
+For HW2, `training/generate_data.py` builds 120 **emulated PointNav episodes** (2,880 samples) around those public RGB frames. Goal distances, relative angles, and expert action labels are generated by a documented deterministic policy. They are educational synthetic metadata and are not claimed to be ground truth recovered from Habitat. Homework 2 explicitly permits publicly available and emulated/synthetically generated data.
+
+Episodes—not individual frames—are split into:
+
+- Training: 2,016 samples (70%)
+- Validation: 432 samples (15%)
+- Test: 432 samples (15%)
+
+The full generated sample table is in `data/navigation_samples.csv`.
+
+## Training and performance
+
+`training/train.py` demonstrates parameter initialization, forward propagation, cross-entropy loss, automatic differentiation/backpropagation, gradient calculation, and parameter updates with Adam. It trains for 90 epochs and writes both PyTorch and browser-ready weights.
+
+| Model | Hidden layers | Test accuracy | Test loss |
+| --- | ---: | ---: | ---: |
+| Navigation MLP | 2 | **95.4%** | **0.0994** |
+| Linear classifier baseline | 0 | 82.2% | 0.6931 |
+
+![Training and validation curves](public/model/training_curves.png)
+
+Saved artifacts:
+
+- `model/navigation_mlp.pt` - PyTorch weights and metrics
+- `public/model/navigation_mlp.json` - browser inference weights
+- `model/metrics.json` - final metrics
+- `model/training_history.json` - per-epoch loss and accuracy
+- `public/model/training_curves.png` - training monitor plot
+
+## Web application features
+
+- Select any trajectory frame and edit goal distance/angle
+- Run the trained MLP directly from the graphical interface
+- Display the next action, confidence, and class probabilities
+- Display training/validation curves, test accuracy, and the linear baseline
+- Browse synchronized RGB, depth, and top-down-map observations
+- Navigate a long trajectory through overview, filmstrip, action, and event tracks
+- Create frame-level point/bounding-box annotations
+- Create trajectory interval annotations
+- Import and export annotations as JSON
+
+Annotation is implemented. A backend and database are not used: annotations are session-local with explicit JSON persistence, and model inference runs in the browser.
+
+## Run the web application
 
 Requires Node.js 22.13 or newer.
 
@@ -88,12 +77,33 @@ npm install
 npm run dev
 ```
 
-Create a production build with `npm run build`.
+Then open the local URL printed by Vinext. Create a production build with:
 
-## Stack
+```bash
+npm run build
+```
 
-- React 19 and TypeScript
-- Vinext / Vite
-- Tailwind CSS
-- shadcn UI primitives
-- Lucide icons
+## Reproduce training
+
+Python 3.10+ is recommended.
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install -r training/requirements.txt
+python training/generate_data.py
+python training/train.py
+```
+
+The scripts use seed `7400` for reproducibility.
+
+## Major libraries and frameworks
+
+- PyTorch for the MLP, loss, backpropagation, and optimization
+- NumPy, Pillow, and Matplotlib for data processing and plots
+- React 19, TypeScript, Vinext, and Vite for the web application
+- shadcn UI primitives and Lucide icons for interface components
+
+## AI-assisted development disclosure
+
+OpenAI Codex was used to help design the educational data pipeline, implement and debug the PyTorch training code, export the trained model for browser inference, integrate the model into the React interface, and edit this README. The task definition, data provenance, architecture, preprocessing, loss, optimizer, evaluation split, baseline comparison, and inference path are documented here so the implementation can be reviewed and explained independently.

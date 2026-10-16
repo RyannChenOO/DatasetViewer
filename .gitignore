@@ -36,3 +36,7 @@ next-env.d.ts
 /.wrangler/
 /outputs/
 /work/
+
+# Python cache
+__pycache__/
+*.py[cod]

@@ -14,17 +14,17 @@ const geistMono = Geist_Mono({
 
 export const metadata: Metadata = {
   metadataBase: new URL('https://locus-campus-spatial-viewer.ryannchenoo.chatgpt.site'),
-  title: 'Habitat Trajectory Annotator',
-  description: 'Annotate long Habitat trajectories at both frame and segment level.',
+  title: 'Habitat Navigation Learner',
+  description: 'Explore Habitat trajectories and predict the next navigation action with a trained MLP.',
   openGraph: {
-    title: 'Habitat Trajectory Annotator',
-    description: 'A trajectory-first annotation workbench for spatial intelligence research.',
-    images: [{ url: '/og.png', width: 1730, height: 909, alt: 'Habitat trajectory annotator interface' }],
+    title: 'Habitat Navigation Learner',
+    description: 'A trajectory-first annotation and neural prediction workbench for spatial intelligence research.',
+    images: [{ url: '/og.png', width: 1730, height: 909, alt: 'Habitat navigation learner interface' }],
   },
   twitter: {
     card: 'summary_large_image',
-    title: 'Habitat Trajectory Annotator',
-    description: 'Frame-level and segment-level labels for long navigation trajectories.',
+    title: 'Habitat Navigation Learner',
+    description: 'Next-action prediction plus frame-level and segment-level trajectory annotation.',
     images: ['/og.png'],
   },
 };

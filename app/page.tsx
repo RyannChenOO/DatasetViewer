@@ -9,6 +9,7 @@ import {
   type PointerEvent as ReactPointerEvent,
 } from 'react';
 import {
+  BrainCircuit,
   BoxSelect,
   ChevronLeft,
   ChevronRight,
@@ -22,6 +23,7 @@ import {
   Play,
   Route,
   ScanLine,
+  Sparkles,
   Trash2,
   Upload,
 } from 'lucide-react';
@@ -53,6 +55,21 @@ type SegmentLabel =
   | 'wrong-turn'
   | 'collision-recovery'
   | 'goal-recognition';
+type ActionName = 'MOVE_FORWARD' | 'TURN_LEFT' | 'TURN_RIGHT' | 'STOP';
+
+type ModelPayload = {
+  architecture: number[];
+  image_size: number;
+  actions: ActionName[];
+  layers: Array<{ weight: number[][]; bias: number[] }>;
+  metrics: {
+    dataset_samples: number;
+    train_accuracy: number;
+    validation_accuracy: number;
+    test_accuracy: number;
+    linear_baseline_test_accuracy: number;
+  };
+};
 
 type FrameAnnotation = {
   id: string;
@@ -123,9 +140,30 @@ const labelForSegment = (value: SegmentLabel) =>
   segmentLabels.find((item) => item.value === value) ?? segmentLabels[0];
 const stepPercent = (step: number) => (step / (TOTAL_STEPS - 1)) * 100;
 
+const actionLabels: Record<ActionName, string> = {
+  MOVE_FORWARD: 'Move forward',
+  TURN_LEFT: 'Turn left',
+  TURN_RIGHT: 'Turn right',
+  STOP: 'Stop',
+};
+
+const predictWithModel = (model: ModelPayload, features: number[]) => {
+  let values = features;
+  model.layers.forEach((layer, layerIndex) => {
+    values = layer.weight.map((row, outputIndex) => {
+      const value = row.reduce((sum, weight, inputIndex) => sum + weight * values[inputIndex], layer.bias[outputIndex]);
+      return layerIndex < model.layers.length - 1 ? Math.max(0, value) : value;
+    });
+  });
+  const maximum = Math.max(...values);
+  const exponentials = values.map((value) => Math.exp(value - maximum));
+  const total = exponentials.reduce((sum, value) => sum + value, 0);
+  return exponentials.map((value) => value / total);
+};
+
 export default function Home() {
   const [currentStep, setCurrentStep] = useState(14);
-  const [activeTab, setActiveTab] = useState<'frame' | 'segment'>('frame');
+  const [activeTab, setActiveTab] = useState<'frame' | 'segment' | 'model'>('model');
   const [drawTool, setDrawTool] = useState<DrawTool>('inspect');
   const [frameLabel, setFrameLabel] = useState<FrameLabel>('landmark');
   const [frameAnnotations, setFrameAnnotations] = useState<FrameAnnotation[]>([]);
@@ -135,6 +173,11 @@ export default function Home() {
   const [segments, setSegments] = useState<SegmentAnnotation[]>(initialSegments);
   const [thumbnailWidth, setThumbnailWidth] = useState(104);
   const [isPlaying, setIsPlaying] = useState(false);
+  const [goalDistance, setGoalDistance] = useState(4.5);
+  const [goalAngle, setGoalAngle] = useState(0);
+  const [model, setModel] = useState<ModelPayload | null>(null);
+  const [prediction, setPrediction] = useState<{ action: ActionName; probabilities: number[] } | null>(null);
+  const [isPredicting, setIsPredicting] = useState(false);
   const [draftBox, setDraftBox] = useState<{
     startX: number;
     startY: number;
@@ -155,6 +198,17 @@ export default function Home() {
     () => segments.filter((item) => currentStep >= item.start && currentStep <= item.end),
     [currentStep, segments],
   );
+
+  useEffect(() => {
+    void fetch('/model/navigation_mlp.json')
+      .then((response) => response.json())
+      .then((payload: ModelPayload) => setModel(payload))
+      .catch(() => setNotice('Could not load the trained navigation model.'));
+  }, []);
+
+  useEffect(() => {
+    setPrediction(null);
+  }, [currentStep, goalDistance, goalAngle]);
 
   useEffect(() => {
     if (!isPlaying) return;
@@ -298,15 +352,45 @@ export default function Home() {
     if (importRef.current) importRef.current.value = '';
   };
 
+  const runPrediction = async () => {
+    if (!model) return;
+    setIsPredicting(true);
+    try {
+      const image = new window.Image();
+      image.src = current.image;
+      await image.decode();
+      const canvas = document.createElement('canvas');
+      canvas.width = model.image_size;
+      canvas.height = model.image_size;
+      const context = canvas.getContext('2d', { willReadFrequently: true });
+      if (!context) throw new Error('Canvas is unavailable');
+      context.drawImage(image, 0, 0, model.image_size, model.image_size);
+      const rgba = context.getImageData(0, 0, model.image_size, model.image_size).data;
+      const features: number[] = [];
+      for (let index = 0; index < rgba.length; index += 4) {
+        features.push(rgba[index] / 255, rgba[index + 1] / 255, rgba[index + 2] / 255);
+      }
+      features.push(goalDistance / 10, (goalAngle * Math.PI) / 180 / Math.PI);
+      const probabilities = predictWithModel(model, features);
+      const bestIndex = probabilities.indexOf(Math.max(...probabilities));
+      setPrediction({ action: model.actions[bestIndex], probabilities });
+      setNotice(`Model predicted ${model.actions[bestIndex]} for frame ${currentStep + 1}.`);
+    } catch {
+      setNotice('Prediction failed. Please try another frame.');
+    } finally {
+      setIsPredicting(false);
+    }
+  };
+
   return (
     <main className="app-shell">
       <header className="topbar">
         <div className="brand-lockup">
           <span className="brand-mark"><Route size={17} /></span>
-          <div><p>Habitat trajectory annotator</p><span>Spatial intelligence data workbench</span></div>
+          <div><p>Habitat navigation learner</p><span>Trajectory annotation + next-action prediction</span></div>
         </div>
         <div className="episode-meta">
-          <Badge variant="outline">POINTNAV · 001</Badge>
+          <Badge variant="outline">HW2 · POINTNAV</Badge>
           <span>Skokloster Castle</span>
           <span>{TOTAL_STEPS} sampled observations</span>
         </div>
@@ -395,8 +479,25 @@ export default function Home() {
           <div className="annotation-tabs" role="tablist">
             <button type="button" className={activeTab === 'frame' ? 'active' : ''} onClick={() => setActiveTab('frame')}>Frame annotation</button>
             <button type="button" className={activeTab === 'segment' ? 'active' : ''} onClick={() => setActiveTab('segment')}>Trajectory segment</button>
+            <button type="button" className={activeTab === 'model' ? 'active' : ''} onClick={() => setActiveTab('model')}>MLP prediction</button>
           </div>
-          {activeTab === 'frame' ? (
+          {activeTab === 'model' ? (
+            <div className="annotation-form prediction-form">
+              <div className="model-summary"><BrainCircuit /><div><span className="kicker">Trained model</span><strong>Navigation MLP</strong><small>194 → 64 → 32 → 4</small></div></div>
+              <label className="slider-field"><span><b>Goal distance</b><output>{goalDistance.toFixed(1)} m</output></span><input type="range" min="0.1" max="10" step="0.1" value={goalDistance} onChange={(event) => setGoalDistance(Number(event.target.value))} /></label>
+              <label className="slider-field"><span><b>Relative goal angle</b><output>{goalAngle > 0 ? '+' : ''}{goalAngle}°</output></span><input type="range" min="-180" max="180" step="5" value={goalAngle} onChange={(event) => setGoalAngle(Number(event.target.value))} /></label>
+              <div className="angle-hint"><span>← goal left</span><i style={{ left: `${((goalAngle + 180) / 360) * 100}%` }} /><span>goal right →</span></div>
+              <Button className="w-full predict-button" disabled={!model || isPredicting} onClick={() => void runPrediction()}><Sparkles /> {isPredicting ? 'Running model…' : 'Predict next action'}</Button>
+              {prediction ? (
+                <div className="prediction-result">
+                  <span className="kicker">Predicted action</span>
+                  <strong>{actionLabels[prediction.action]}</strong>
+                  <small>{(Math.max(...prediction.probabilities) * 100).toFixed(1)}% confidence</small>
+                  <div className="probability-list">{model?.actions.map((action, index) => <div key={action}><span>{actionLabels[action]}</span><i><b style={{ width: `${prediction.probabilities[index] * 100}%` }} /></i><output>{(prediction.probabilities[index] * 100).toFixed(0)}%</output></div>)}</div>
+                </div>
+              ) : <div className="prediction-placeholder"><Sparkles /><p>Select a frame, set the relative goal, and run the trained model entirely in the browser.</p></div>}
+            </div>
+          ) : activeTab === 'frame' ? (
             <div className="annotation-form">
               <div><span className="kicker">Geometry</span><div className="tool-grid">
                 <button type="button" className={drawTool === 'inspect' ? 'active' : ''} onClick={() => setDrawTool('inspect')}><MousePointer2 /> Inspect</button>
@@ -461,6 +562,12 @@ export default function Home() {
         <div className="event-track-row"><span className="track-label">ACTION</span><div className="event-track">{frames.map((frame) => <button key={frame.step} type="button" aria-label={`Frame ${frame.step + 1}: ${frame.action}`} style={{ width: `${100 / TOTAL_STEPS}%` }} className={`action-cell ${frame.action.toLowerCase()} ${frame.step === currentStep ? 'selected' : ''}`} title={`${frame.step + 1}: ${frame.action}`} onClick={() => setCurrentStep(frame.step)} />)}</div></div>
         <div className="event-track-row"><span className="track-label">EVENTS</span><div className="event-track">{frames.map((frame) => <button key={frame.step} type="button" aria-label={frame.collision ? `Collision at frame ${frame.step + 1}` : `No event at frame ${frame.step + 1}`} style={{ width: `${100 / TOTAL_STEPS}%` }} className={`event-cell ${frame.collision ? 'collision' : ''}`} title={frame.collision ? `Collision at frame ${frame.step + 1}` : `Frame ${frame.step + 1}`} onClick={() => setCurrentStep(frame.step)} />)}</div></div>
         <div className="timeline-legend"><span><i className="legend-forward" /> forward</span><span><i className="legend-left" /> turn left</span><span><i className="legend-right" /> turn right</span><span><i className="legend-collision" /> collision</span><p>{notice}</p></div>
+      </section>
+
+      <section className="model-monitor panel">
+        <div className="monitor-copy"><span className="kicker">HW2 learning pipeline</span><h2>RGB + relative goal → next action</h2><p>The selected Habitat RGB frame is resized to 8×8 RGB values and concatenated with normalized goal distance and angle. Two ReLU hidden layers produce four action probabilities.</p><div className="pipeline"><span>194 inputs</span><i>→</i><span>64 ReLU</span><i>→</i><span>32 ReLU</span><i>→</i><span>4 actions</span></div></div>
+        <div className="training-plot"><img src="/model/training_curves.png" alt="Training and validation loss and accuracy curves over 90 epochs" /></div>
+        <div className="metric-stack"><span className="kicker">Held-out evaluation</span><div><strong>{model ? `${(model.metrics.test_accuracy * 100).toFixed(1)}%` : '—'}</strong><small>MLP test accuracy</small></div><div><strong>{model ? `${(model.metrics.linear_baseline_test_accuracy * 100).toFixed(1)}%` : '—'}</strong><small>Linear baseline</small></div><div><strong>{model?.metrics.dataset_samples ?? '—'}</strong><small>Emulated samples</small></div><p>Split by episode: 70% train · 15% validation · 15% test.</p></div>
       </section>
 
       <footer className="provenance-bar"><Map /><p><strong>Public data source:</strong> Habitat-Lab official PointNav top-down-map visualization. The original GIF provides RGB, depth and map imagery; this prototype samples 30 synchronized observations for interface design.</p><a href="https://github.com/facebookresearch/habitat-lab" target="_blank" rel="noreferrer">View source</a></footer>

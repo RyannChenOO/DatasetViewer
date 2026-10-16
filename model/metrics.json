@@ -1,0 +1,18 @@
+{
+  "dataset_samples": 2880,
+  "split_samples": {
+    "train": 2016,
+    "val": 432,
+    "test": 432
+  },
+  "epochs": 90,
+  "learning_rate": 0.0025,
+  "optimizer": "Adam",
+  "loss": "CrossEntropyLoss",
+  "train_accuracy": 0.9653,
+  "validation_accuracy": 0.9444,
+  "test_accuracy": 0.9537,
+  "test_loss": 0.0994,
+  "linear_baseline_test_accuracy": 0.8218,
+  "linear_baseline_test_loss": 0.6931
+}
