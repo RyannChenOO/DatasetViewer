@@ -71,6 +71,24 @@ type ModelPayload = {
   };
 };
 
+type MetricSummary = { mean: number; std: number };
+type HW3Summary = {
+  experiment: string;
+  controls: { seeds: number[]; epochs: number; split: Record<'train' | 'val' | 'test', number> };
+  models: Record<
+    'baseline' | 'gated_residual' | 'ungated_residual',
+    {
+      label: string;
+      parameter_count: number;
+      test_accuracy: MetricSummary;
+      test_macro_f1: MetricSummary;
+      test_loss: MetricSummary;
+      per_class_accuracy: Record<ActionName, MetricSummary>;
+      gate_statistics?: { mean: MetricSummary; saturation_fraction: MetricSummary };
+    }
+  >;
+};
+
 type FrameAnnotation = {
   id: string;
   frame: number;
@@ -176,6 +194,7 @@ export default function Home() {
   const [goalDistance, setGoalDistance] = useState(4.5);
   const [goalAngle, setGoalAngle] = useState(0);
   const [model, setModel] = useState<ModelPayload | null>(null);
+  const [hw3Summary, setHW3Summary] = useState<HW3Summary | null>(null);
   const [prediction, setPrediction] = useState<{ action: ActionName; probabilities: number[] } | null>(null);
   const [isPredicting, setIsPredicting] = useState(false);
   const [draftBox, setDraftBox] = useState<{
@@ -201,12 +220,20 @@ export default function Home() {
 
   useEffect(() => {
     void fetch('/model/navigation_mlp.json')
-      .then((response) => response.json())
-      .then((payload: ModelPayload) => setModel(payload))
+      .then(async (response) => (await response.json()) as ModelPayload)
+      .then((payload) => setModel(payload))
       .catch(() => setNotice('Could not load the trained navigation model.'));
   }, []);
 
   useEffect(() => {
+    void fetch('/model/hw3_summary.json')
+      .then(async (response) => (await response.json()) as HW3Summary)
+      .then((payload) => setHW3Summary(payload))
+      .catch(() => setNotice('Could not load the HW3 experiment summary.'));
+  }, []);
+
+  useEffect(() => {
+    // oxlint-disable-next-line react-compiler
     setPrediction(null);
   }, [currentStep, goalDistance, goalAngle]);
 
@@ -387,10 +414,10 @@ export default function Home() {
       <header className="topbar">
         <div className="brand-lockup">
           <span className="brand-mark"><Route size={17} /></span>
-          <div><p>Habitat navigation learner</p><span>Trajectory annotation + next-action prediction</span></div>
+          <div><p>Habitat navigation learner</p><span>Trajectory annotation + neural design experiment</span></div>
         </div>
         <div className="episode-meta">
-          <Badge variant="outline">HW2 · POINTNAV</Badge>
+          <Badge variant="outline">HW3 · POINTNAV</Badge>
           <span>Skokloster Castle</span>
           <span>{TOTAL_STEPS} sampled observations</span>
         </div>
@@ -484,8 +511,8 @@ export default function Home() {
           {activeTab === 'model' ? (
             <div className="annotation-form prediction-form">
               <div className="model-summary"><BrainCircuit /><div><span className="kicker">Trained model</span><strong>Navigation MLP</strong><small>194 → 64 → 32 → 4</small></div></div>
-              <label className="slider-field"><span><b>Goal distance</b><output>{goalDistance.toFixed(1)} m</output></span><input type="range" min="0.1" max="10" step="0.1" value={goalDistance} onChange={(event) => setGoalDistance(Number(event.target.value))} /></label>
-              <label className="slider-field"><span><b>Relative goal angle</b><output>{goalAngle > 0 ? '+' : ''}{goalAngle}°</output></span><input type="range" min="-180" max="180" step="5" value={goalAngle} onChange={(event) => setGoalAngle(Number(event.target.value))} /></label>
+              <label className="slider-field"><span><b>Goal distance</b><output>{goalDistance.toFixed(1)} m</output></span><input aria-label="Goal distance" type="range" min="0.1" max="10" step="0.1" value={goalDistance} onChange={(event) => setGoalDistance(Number(event.target.value))} /></label>
+              <label className="slider-field"><span><b>Relative goal angle</b><output>{goalAngle > 0 ? '+' : ''}{goalAngle}°</output></span><input aria-label="Relative goal angle" type="range" min="-180" max="180" step="5" value={goalAngle} onChange={(event) => setGoalAngle(Number(event.target.value))} /></label>
               <div className="angle-hint"><span>← goal left</span><i style={{ left: `${((goalAngle + 180) / 360) * 100}%` }} /><span>goal right →</span></div>
               <Button className="w-full predict-button" disabled={!model || isPredicting} onClick={() => void runPrediction()}><Sparkles /> {isPredicting ? 'Running model…' : 'Predict next action'}</Button>
               {prediction ? (
@@ -568,6 +595,52 @@ export default function Home() {
         <div className="monitor-copy"><span className="kicker">HW2 learning pipeline</span><h2>RGB + relative goal → next action</h2><p>The selected Habitat RGB frame is resized to 8×8 RGB values and concatenated with normalized goal distance and angle. Two ReLU hidden layers produce four action probabilities.</p><div className="pipeline"><span>194 inputs</span><i>→</i><span>64 ReLU</span><i>→</i><span>32 ReLU</span><i>→</i><span>4 actions</span></div></div>
         <div className="training-plot"><img src="/model/training_curves.png" alt="Training and validation loss and accuracy curves over 90 epochs" /></div>
         <div className="metric-stack"><span className="kicker">Held-out evaluation</span><div><strong>{model ? `${(model.metrics.test_accuracy * 100).toFixed(1)}%` : '—'}</strong><small>MLP test accuracy</small></div><div><strong>{model ? `${(model.metrics.linear_baseline_test_accuracy * 100).toFixed(1)}%` : '—'}</strong><small>Linear baseline</small></div><div><strong>{model?.metrics.dataset_samples ?? '—'}</strong><small>Emulated samples</small></div><p>Split by episode: 70% train · 15% validation · 15% test.</p></div>
+      </section>
+
+      <section className="hw3-lab panel">
+        <div className="hw3-heading">
+          <div>
+            <span className="kicker">HW3 · Break the network</span>
+            <h2>Goal-conditioned gated residual fusion</h2>
+            <p>The HW2 baseline mixes 192 RGB values with only two goal values at the first layer. The proposed model gives each modality its own encoder, then lets the goal vector control a residual correction to the visual representation.</p>
+          </div>
+          <div className="hypothesis-card"><Sparkles /><p><strong>Hypothesis</strong>The gate should make goal context harder to ignore while preserving a direct visual path. It may fail if the sigmoid saturates and becomes an almost-always-open switch.</p></div>
+        </div>
+
+        <div className="architecture-flow" aria-label="Goal-gated residual architecture diagram">
+          <div><span>RGB 8×8×3</span><strong>Visual encoder</strong><small>192 → 64 ReLU</small></div>
+          <i>+</i>
+          <div><span>Goal (d, θ)</span><strong>Goal encoder</strong><small>2 → 16 ReLU</small></div>
+          <i>→</i>
+          <div className="architecture-accent"><span>Residual fusion</span><strong>v + σ(Wg) ⊙ tanh(Wc)</strong><small>goal-controlled correction</small></div>
+          <i>→</i>
+          <div><span>Classifier</span><strong>64 → 32 → 4</strong><small>next action logits</small></div>
+        </div>
+
+        <div className="experiment-grid">
+          {(['baseline', 'gated_residual', 'ungated_residual'] as const).map((key) => {
+            const result = hw3Summary?.models[key];
+            return (
+              <article key={key} className={key === 'gated_residual' ? 'featured' : ''}>
+                <div className="experiment-card-title"><span>{key === 'baseline' ? 'Control' : key === 'gated_residual' ? 'Proposed' : 'Ablation'}</span>{key === 'gated_residual' && <Badge>Full design</Badge>}</div>
+                <h3>{result?.label ?? (key === 'baseline' ? 'HW2 baseline' : key === 'gated_residual' ? 'Goal-gated residual' : 'No-gate ablation')}</h3>
+                <strong>{result ? `${(result.test_accuracy.mean * 100).toFixed(2)}%` : '—'}</strong>
+                <small>mean test accuracy ± {result ? `${(result.test_accuracy.std * 100).toFixed(2)}` : '—'} pp</small>
+                <dl><div><dt>Macro F1</dt><dd>{result ? (result.test_macro_f1.mean * 100).toFixed(2) : '—'}%</dd></div><div><dt>Parameters</dt><dd>{result?.parameter_count.toLocaleString() ?? '—'}</dd></div><div><dt>Forward accuracy</dt><dd>{result ? (result.per_class_accuracy.MOVE_FORWARD.mean * 100).toFixed(1) : '—'}%</dd></div></dl>
+              </article>
+            );
+          })}
+        </div>
+
+        <div className="evidence-grid">
+          <figure><img src="/model/hw3_training_curves.png" alt="Validation curves for baseline, gated residual, and no-gate ablation over five seeds" /><figcaption>Validation curves · mean ± one standard deviation across five seeds</figcaption></figure>
+          <figure><img src="/model/hw3_confusion_matrices.png" alt="Mean test confusion matrices for the three HW3 models" /><figcaption>Per-class evidence · row-normalized test confusion matrices</figcaption></figure>
+        </div>
+
+        <div className="finding-strip">
+          <BrainCircuit />
+          <p><strong>What happened:</strong> the proposed model improved mean test accuracy by {hw3Summary ? `${((hw3Summary.models.gated_residual.test_accuracy.mean - hw3Summary.models.baseline.test_accuracy.mean) * 100).toFixed(2)}` : '—'} percentage points over HW2. The no-gate ablation captured most of that gain, while the learned gate added only {hw3Summary ? `${((hw3Summary.models.gated_residual.test_accuracy.mean - hw3Summary.models.ungated_residual.test_accuracy.mean) * 100).toFixed(2)}` : '—'} points. Its mean activation was {hw3Summary?.models.gated_residual.gate_statistics ? hw3Summary.models.gated_residual.gate_statistics.mean.mean.toFixed(2) : '—'}, with {hw3Summary?.models.gated_residual.gate_statistics ? `${(hw3Summary.models.gated_residual.gate_statistics.saturation_fraction.mean * 100).toFixed(1)}%` : '—'} of gates near saturation—evidence that separate modality processing and the residual path mattered more than fine-grained gating.</p>
+        </div>
       </section>
 
       <footer className="provenance-bar"><Map /><p><strong>Public data source:</strong> Habitat-Lab official PointNav top-down-map visualization. The original GIF provides RGB, depth and map imagery; this prototype samples 30 synchronized observations for interface design.</p><a href="https://github.com/facebookresearch/habitat-lab" target="_blank" rel="noreferrer">View source</a></footer>
